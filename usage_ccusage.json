@@ -1,0 +1,17 @@
+{
+  "tool": "ccusage",
+  "tool_version": "20.0.26",
+  "report_date": "2026-10-03",
+  "session_label": "Test de jarron FreeCAD desde imagen",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "medium",
+  "uncached_input_tokens": 30670,
+  "cached_input_tokens": 865152,
+  "output_tokens": 10541,
+  "reasoning_output_tokens_included_in_output": 3985,
+  "total_tokens": 906363,
+  "estimated_api_equivalent_cost_usd": 0.25326519999999997,
+  "is_fallback_model": false,
+  "scope": "Sesion principal completa; no se identificaron subagentes en el registro revisado.",
+  "cost_note": "Estimacion de ccusage con sus tarifas disponibles; no es factura ni creditos de suscripcion."
+}

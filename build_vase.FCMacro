@@ -1,0 +1,120 @@
+import FreeCAD as App
+import Part, Sketcher, math, os, json
+
+OUT = os.path.dirname(os.path.abspath(__file__))
+doc = App.newDocument('ReferenceVase')
+doc.Label = 'Reference vase — fluted ceramic'
+V = App.Vector
+
+def spline(points):
+    c = Part.BSplineCurve()
+    c.interpolate([V(r,z,0) for r,z in points])
+    return c
+
+sk = doc.addObject('Sketcher::SketchObject','WallProfile')
+sk.Label = '01 · Hollow wall profile (mm)'
+sk.Placement = App.Placement(V(0,0,0), App.Rotation(V(1,0,0),90))
+outer_base = [(48,0),(54,3),(62,9),(68,18),(71,28),(72,40)]
+outer_shoulder = [(72,260),(71.3,270),(67.5,280),(59,290),(46.5,300),(40.5,308)]
+inner_shoulder = [(36.5,308),(42.5,300),(55,290),(63.5,280),(67.3,270),(68,260)]
+inner_base = [(68,40),(67,29),(64,20),(58,11),(49,5)]
+def line(a,b):
+    sk.addGeometry(Part.LineSegment(V(*a,0),V(*b,0)),False)
+
+# A single closed section: outer wall, rim, inner wall and solid floor.
+line((0,0),(52,0))
+sk.addGeometry(Part.Arc(V(52,0,0),V(52+20/math.sqrt(2),20-20/math.sqrt(2),0),V(72,20,0)),False)
+line((72,20),(72,260))
+shoulder = spline(outer_shoulder)
+sk.addGeometry(shoulder,False)
+line((40.5,308),(40.5,320))
+line((40.5,320),(36.5,320))
+line((36.5,320),(36.5,308))
+sk.addGeometry(spline(inner_shoulder),False)
+line((68,260),(68,22))
+sk.addGeometry(Part.Arc(V(68,22,0),V(51+17/math.sqrt(2),22-17/math.sqrt(2),0),V(51,5,0)),False)
+line((51,5),(0,5))
+line((0,5),(0,0))
+doc.recompute()
+body = doc.addObject('Part::Revolution','RevolvedWall')
+body.Label = '02 · Revolved hollow body / 5 mm floor'
+body.Source = sk
+body.Axis = V(0,0,1)
+body.Angle = 360
+body.Solid = True
+doc.recompute()
+print('Wall:',body.Shape.isValid(),body.Shape.Volume,flush=True)
+
+# Smooth circle lofts create rounded, vertical channels that follow the shoulder.
+# Their lower ends are clipped by an oblique plane, producing the curved band.
+samples = []
+for i in range(1001):
+    p = shoulder.value(shoulder.FirstParameter+(shoulder.LastParameter-shoulder.FirstParameter)*i/1000)
+    samples.append((p.y,p.x))
+samples.sort()
+def radius_at(z):
+    if z <= 260: return 72.0
+    for j in range(1,len(samples)):
+        if samples[j][0] >= z:
+            z0,r0 = samples[j-1]; z1,r1 = samples[j]
+            return r0+(r1-r0)*(z-z0)/(z1-z0)
+    return 40.5
+
+N = 64
+zs = [260,266,272,278,284,290,296,300,303,305,307]
+cutters = []
+for i in range(N):
+    angle = 2*math.pi*i/N
+    circles = []
+    for z in zs:
+        # Fade the channel gently into the short plain neck.
+        factor = 1.0 if z <= 300 else max(0.06,(308-z)/8)
+        rad = 2.45*factor
+        center_r = radius_at(z)+0.65*factor
+        edge = Part.makeCircle(rad,V(center_r*math.cos(angle),center_r*math.sin(angle),z),V(0,0,1))
+        circles.append(Part.Wire([edge]))
+    shoulder_tool = Part.makeLoft(circles,True,False)
+    straight_tool = Part.makeCylinder(2.45,240,V(72.65*math.cos(angle),72.65*math.sin(angle),20),V(0,0,1))
+    joined = straight_tool.fuse(shoulder_tool).removeSplitter()
+    assert joined.isValid() and len(joined.Solids)==1, 'Invalid groove %d' % i
+    cutters.append(joined)
+    if i % 16 == 0: print('Groove loft',i,flush=True)
+
+corners = [V(x,y,110+0.75*x+0.58*y) for x,y in [(-220,-220),(220,-220),(220,220),(-220,220)]]
+plane = Part.Face(Part.makePolygon(corners+[corners[0]]))
+upper_region = plane.extrude(V(0,0,500))
+tools = Part.makeCompound([c.common(upper_region) for c in cutters])
+assert tools.isValid() and len(tools.Solids)==64, 'Invalid trimmed grooves'
+tool = doc.addObject('PartDesign::Feature','FluteTools')
+tool.Label = '03 · 64 rounded channels / diagonal termination'
+tool.Shape = tools
+for name,value in [('Count',64),('GrooveRadius',2.45),('BandHeight',110.0),('BandSlopeX',0.75),('BandSlopeY',0.58)]:
+    typ = 'App::PropertyInteger' if name == 'Count' else 'App::PropertyFloat'
+    tool.addProperty(typ,name,'Design')
+    setattr(tool,name,value)
+tool.addProperty('App::PropertyString','DesignNote','Design')
+tool.DesignNote = 'Reference approximation. Regenerate with supplied macro to change flute layout.'
+final = doc.addObject('Part::Cut','Vase')
+final.Label = '04 · Finished fluted vase'
+final.Base = body
+final.Tool = tool
+final.Refine = True
+doc.recompute()
+print('Final:',final.Shape.isValid(),'solids',len(final.Shape.Solids),'volume',final.Shape.Volume,flush=True)
+assert final.Shape.isValid() and len(final.Shape.Solids)==1
+assert final.Shape.Volume>0
+assert final.Shape.isInside(V(0,0,2),0.0001,True), 'Floor check failed'
+assert not final.Shape.isInside(V(0,0,150),0.0001,True), 'Cavity check failed'
+
+spec = doc.addObject('Spreadsheet::Sheet','Dimensions')
+spec.Label = 'Dimensions / reference assumptions'
+rows = [('Parameter','Value','Unit / note'),('Height','320','mm'),('Body diameter','144','mm, before fluting'),('Mouth outer diameter','81','mm'),('Mouth inner diameter','73','mm'),('Nominal wall','4','mm'),('Floor thickness','5','mm'),('Flute count','64','equally spaced'),('Flute radius','2.45','mm'),('Maximum flute depth','1.8','mm'),('Band plane center height','110','mm'),('Band plane slopes','0.75 / 0.58','z = 110 + 0.75 x + 0.58 y'),('Reference','reference.jpg','Photo proportions; no measured scale')]
+for row,values in enumerate(rows,1):
+    for col,value in zip('ABC',values): spec.set(col+str(row),value)
+spec.setColumnWidth('A',190); spec.setColumnWidth('B',150); spec.setColumnWidth('C',270)
+doc.recompute()
+doc.saveAs(os.path.join(OUT,'Fluted_Reference_Vase.FCStd'))
+final.Shape.exportStep(os.path.join(OUT,'Fluted_Reference_Vase.step'))
+report = {'valid':final.Shape.isValid(),'solids':len(final.Shape.Solids),'nominal_height_mm':320,'nominal_body_diameter_mm':144,'volume_mm3':final.Shape.Volume,'faces':len(final.Shape.Faces)}
+with open(os.path.join(OUT,'validation.json'),'w') as f: json.dump(report,f,indent=2)
+print(json.dumps(report),flush=True)
